@@ -5,9 +5,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gregwebs/go-parallel"
 	"github.com/gregwebs/go-recovery"
 	"github.com/stretchr/testify/assert"
-	"github.com/gregwebs/go-parallel"
 )
 
 func TestRecoveredCall(t *testing.T) {
@@ -123,7 +123,7 @@ func TestArrayWorkers1(t *testing.T) {
 	err = arrayWorkers1(0, tracked, workNone)
 	assert.Nil(t, err)
 
-	tracked = make([]bool, 10)
+	tracked = make([]bool, 1)
 	err = arrayWorkers1(10, tracked, workNone)
 	assert.Nil(t, err)
 

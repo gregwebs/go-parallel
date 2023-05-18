@@ -174,6 +174,10 @@ type withIndex[T any] struct {
 // Returns a channel of errors
 // Uses QueueWorkers under the hood
 func ArrayWorkers1[T any](nParallel int, objects []T, cancel <-chan struct{}, fn func(int, T) error) <-chan error {
+	if len(objects) < nParallel {
+		nParallel = len(objects)
+	}
+
 	queue := make(chan withIndex[T])
 	// put the objects into the queue
 	go recovery.Go(func() error {
