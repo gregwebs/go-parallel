@@ -1,0 +1,68 @@
+name: build
+on:
+  push:
+    tags:
+      - v*
+    branches:
+      - main
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - name: setup
+        uses: actions/setup-go@v4
+        with:
+          go-version: '>=1.21'
+          cache: false
+          check-latest: true
+
+      - name: test
+        run: go build . && go test .
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          args: --timeout=3m
+          only-new-issues: true
+
+      - name: Mod Tidy
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum || (echo "go modules are not tidy, run 'go mod tidy'." && exit 1)
+
+
+  license-check:
+    runs-on: ubuntu-latest
+    name: License Check
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - name: Get google/go-licenses package
+        shell: bash
+        run: go install github.com/google/go-licenses@latest
+
+      - name: Run Check
+        run: $HOME/go/bin/go-licenses check . --allowed_licenses Apache-2.0,MIT,BSD-2-Clause
+        shell: bash
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - id: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+           go-version-input: 1.21
+           go-package: ./...
+           cache: false
