@@ -154,30 +154,21 @@ func (sn *SyncNumber) Add(x int) {
 	sn.Number = sn.Number + x
 }
 
-func batchWorkers[T any](nParallel int, batchSize int, objects []T, worker func([]T) error) error {
-	bw := parallel.BatchWork{
-		Size:        batchSize,
-		Parallelism: nParallel,
-		Cancel:      make(chan struct{}),
-	}
-	queue := parallel.BatchedChannel(bw, objects)
-	errors := parallel.QueueWorkers(bw.Parallelism, queue, worker)
-	return parallel.CancelAfterFirstError(bw.Cancel, errors)
-}
-
 func TestBatchWorkers(t *testing.T) {
 	var err error
 	workNone := func(_ []bool) error { return nil }
 	tracked := make([]bool, 10)
-	err = batchWorkers(0, 2, tracked, workNone)
+	bw := parallel.BatchWork{Size: 2, Parallelism: 0}
+	err = parallel.BatchWorkers(bw, tracked, workNone)
 	assert.Nil(t, err)
 
 	tracked = make([]bool, 10)
-	err = batchWorkers(2, 2, tracked, workNone)
+	bw = parallel.BatchWork{Size: 2, Parallelism: 2}
+	err = parallel.BatchWorkers(bw, tracked, workNone)
 	assert.Nil(t, err)
 
 	work := make([]int, 10)
-	for i, _ := range work {
+	for i := range work {
 		work[i] = i + 1
 	}
 	output := SyncNumber{Number: 0}
@@ -187,17 +178,38 @@ func TestBatchWorkers(t *testing.T) {
 		}
 		return nil
 	}
-	err = batchWorkers(1, 1, work, add)
+	bw = parallel.BatchWork{Size: 1, Parallelism: 1}
+	err = parallel.BatchWorkers(bw, work, add)
 	assert.Nil(t, err)
 	assert.Equal(t, output.Number, 55)
 
 	output = SyncNumber{Number: 0}
-	err = batchWorkers(2, 2, work, add)
+	bw = parallel.BatchWork{Size: 2, Parallelism: 2}
+	err = parallel.BatchWorkers(bw, work, add)
 	assert.Nil(t, err)
 	assert.Equal(t, output.Number, 55)
 
 	output = SyncNumber{Number: 0}
-	err = batchWorkers(3, 3, work, add)
+	bw = parallel.BatchWork{Size: 3, Parallelism: 3}
+	err = parallel.BatchWorkers(bw, work, add)
 	assert.Nil(t, err)
 	assert.Equal(t, output.Number, 55)
+}
+
+func TestBatchWorkersSmallBatchSize(t *testing.T) {
+	output := SyncNumber{Number: 0}
+	add := func(batch []int) error {
+		for _, x := range batch {
+			output.Add(x)
+		}
+		return nil
+	}
+	work := make([]int, 3)
+	for i := range work {
+		work[i] = i + 1
+	}
+	bw := parallel.BatchWork{Size: 1, Parallelism: 2}
+	err := parallel.BatchWorkers(bw, work, add)
+	assert.Nil(t, err)
+	assert.Equal(t, 6, output.Number)
 }
