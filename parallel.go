@@ -73,7 +73,7 @@ func QueueWorkers[T any](n int, queue <-chan T, fn func(T) error) <-chan error {
 		chans[i] = make(chan T)
 	}
 	closeChans := func() {
-		for i, _ := range chans {
+		for i := range chans {
 			close(chans[i])
 		}
 	}
@@ -178,6 +178,17 @@ func ArrayWorkers1[T any](nParallel int, objects []T, cancel <-chan struct{}, fn
 		nParallel = len(objects)
 	}
 
+	if len(objects) == 1 {
+		errors := make(chan error)
+		go recovery.Go(func() error {
+			errors <- recovery.Call(func() error {
+				return fn(0, objects[0])
+			})
+			return nil
+		})
+		return errors
+	}
+
 	queue := make(chan withIndex[T])
 	// put the objects into the queue
 	go recovery.Go(func() error {
@@ -217,12 +228,24 @@ type BatchWork struct {
 	Cancel      chan struct{}
 }
 
+// BatchWorkers combines BatchedChannel, QueueWorkers, and CancelAfterFirstError
+// The given objects are batched up and worked in parallel
+func BatchWorkers[T any](bw BatchWork, objects []T, worker func([]T) error) error {
+	if bw.Cancel == nil {
+		bw.Cancel = make(chan struct{})
+	}
+	queue := BatchedChannel(bw, objects)
+	errors := QueueWorkers(bw.Parallelism, queue, worker)
+	return CancelAfterFirstError(bw.Cancel, errors)
+}
+
 // If the length is too small, decrease the batch size
 func (bw *BatchWork) AdjustForSmallLength(total int) int {
 	bw.Size = adjustBatchingForLength(bw.Parallelism, bw.Size, total)
 	return bw.Size
 }
 
+// BatchedChannel sends slices of Batchwork.Size objects to the resulting channel
 func BatchedChannel[T any](bw BatchWork, objects []T) <-chan []T {
 	sender := make(chan []T)
 	total := len(objects)
