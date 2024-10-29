@@ -2,31 +2,10 @@ package parallel
 
 import (
 	"reflect"
-	"sync"
 
+	"github.com/gregwebs/go-concurrent"
 	"github.com/gregwebs/go-recovery"
 )
-
-// Concurrent spawns n go routines each of which runs the given function.
-// a panic in the given function is recovered and converted to an error
-// errors are returned as []error, a slice of errors
-// If there are no errors, the slice will be nil
-// To combine the errors as a single error, use errors.Join
-func Concurrent(n int, fn func(int) error) []error {
-	errs := make([]error, n)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		i := i
-		wg.Add(1)
-		go recovery.GoHandler(func(err error) { errs[i] = err }, func() error {
-			defer wg.Done()
-			errs[i] = fn(i)
-			return nil
-		})
-	}
-	wg.Wait()
-	return removeNilErrors(errs...)
-}
 
 func sendErrorRecover(c chan<- error, err error) error {
 	if err == nil {
@@ -41,27 +20,6 @@ func sendWithRecover[T any](c chan<- T, obj T) error {
 		c <- obj
 		return nil
 	})
-}
-
-// try to send to a channel, return true if sent, false if not
-func TrySend[T any](c chan<- T, obj T) bool {
-	select {
-	case c <- obj:
-		return true
-	default:
-		return false
-	}
-}
-
-// try to receive from a channel, return false if nothing received
-func TryRecv[T any](c <-chan T) (receivedObject T, received bool) {
-	select {
-	case receivedObject = <-c:
-		received = true
-	default:
-		received = false
-	}
-	return
 }
 
 // Wait for all errors from a channel of errors.
@@ -105,7 +63,7 @@ func QueueWorkers[T any](n int, queue <-chan T, fn func(T) error) <-chan error {
 
 	distributeWork := func(work T) {
 		for _, c := range chans {
-			if worked := TrySend(c, work); worked {
+			if worked := concurrent.TrySend(c, work); worked {
 				return
 			}
 		}
@@ -154,7 +112,7 @@ func QueueWorkers[T any](n int, queue <-chan T, fn func(T) error) <-chan error {
 		return sendErrorRecover(errChannel, recovery.Call(func() error {
 			unsentErrorsAll := make([][]error, n)
 			// run a concurrent worker for each channel
-			recoveredErrors := Concurrent(n, func(i int) error {
+			recoveredErrors := concurrent.GoN(n, func(i int) error {
 				// Attempt to send an error or recovered panic to the error channel.
 				// But if the error channel is blocked, don't wait:
 				// go ahead and process the work
@@ -162,7 +120,7 @@ func QueueWorkers[T any](n int, queue <-chan T, fn func(T) error) <-chan error {
 				var unsentErrors []error
 				for work := range chans[i] {
 					if err := recovery.Call(func() error { return fn(work) }); err != nil {
-						if sent := TrySend(errChannel, err); !sent {
+						if sent := concurrent.TrySend(errChannel, err); !sent {
 							unsentErrors = append(unsentErrors, err)
 						}
 					}
@@ -170,7 +128,7 @@ func QueueWorkers[T any](n int, queue <-chan T, fn func(T) error) <-chan error {
 				// Try sending unsent errors again
 				// Don't block though so the Go routine can be shutdown
 				for unsentI, err := range unsentErrors {
-					if sent := TrySend(errChannel, err); sent {
+					if sent := concurrent.TrySend(errChannel, err); sent {
 						unsentErrors[unsentI] = nil
 					}
 				}
@@ -258,7 +216,7 @@ func ArrayWorkers1[T any](nParallel int, objects []T, cancel <-chan struct{}, fn
 			defer close(queue)
 
 			for i, object := range objects {
-				if _, canceled := TryRecv(cancel); canceled {
+				if _, canceled := concurrent.TryRecv(cancel); canceled {
 					break
 				}
 				queue <- withIndex[T]{Index: i, val: object}
@@ -273,7 +231,7 @@ func ArrayWorkers1[T any](nParallel int, objects []T, cancel <-chan struct{}, fn
 
 	// queue and errChannel are not closed even though errQueueWorkers is?
 	errQueueWorkers := QueueWorkers(nParallel, queue, withIndexFn)
-	return ChannelMerge(errQueueWorkers, errChannel)
+	return concurrent.ChannelMerge(errQueueWorkers, errChannel)
 }
 
 // If the length is too small, decrease the batch size
@@ -301,7 +259,7 @@ func BatchWorkers[T any](bw BatchWork, objects []T, worker func([]T) error) []er
 		bw.Cancel = make(chan struct{})
 	}
 	queue, errBatched := BatchedChannel(bw, objects)
-	errors := ChannelMerge(QueueWorkers(bw.Parallelism, queue, worker), errBatched)
+	errors := concurrent.ChannelMerge(QueueWorkers(bw.Parallelism, queue, worker), errBatched)
 	return CancelAfterFirstError(bw.Cancel, errors)
 }
 
@@ -330,7 +288,7 @@ func BatchedChannel[T any](bw BatchWork, objects []T) (<-chan []T, <-chan error)
 			tryCancel := func() bool { return false }
 			if bw.Cancel != nil {
 				tryCancel = func() bool {
-					_, canceled := TryRecv(bw.Cancel)
+					_, canceled := concurrent.TryRecv(bw.Cancel)
 					return canceled
 				}
 			}
@@ -360,7 +318,7 @@ func MapBatches[T any, U any](nParallel int, objects []T, fn func(T) (U, error))
 	total := len(objects)
 	out := make([]U, total)
 	batchSize := total / nParallel
-	err := Concurrent(nParallel, func(n int) (err error) {
+	err := concurrent.GoN(nParallel, func(n int) (err error) {
 		max := (n + 1) * batchSize
 		// Because we do integer division there is an extra remainder
 		// Add it onto the end
@@ -385,51 +343,4 @@ func MapBatches[T any, U any](nParallel int, objects []T, fn func(T) (U, error))
 		return nil
 	})
 	return out, err
-}
-
-// This is the same as errors.Join but does not wrap the array
-func removeNilErrors(errs ...error) []error {
-	n := 0
-	for _, err := range errs {
-		if err != nil {
-			n++
-		}
-	}
-	if n == 0 {
-		return nil
-	}
-	newErrs := make([]error, 0, n)
-	for _, err := range errs {
-		if err != nil {
-			newErrs = append(newErrs, err)
-		}
-	}
-	return newErrs
-}
-
-// From this article: https://go.dev/blog/pipelines
-func ChannelMerge[T any](cs ...<-chan T) <-chan T {
-	var wg sync.WaitGroup
-	out := make(chan T)
-
-	// Start an output goroutine for each input channel in cs.  output
-	// copies values from c to out until c is closed, then calls wg.Done.
-	output := func(c <-chan T) {
-		for n := range c {
-			out <- n
-		}
-		wg.Done()
-	}
-	wg.Add(len(cs))
-	for _, c := range cs {
-		go output(c)
-	}
-
-	// Start a goroutine to close out once all the output goroutines are
-	// done.  This must start after the wg.Add call.
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-	return out
 }
