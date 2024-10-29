@@ -17,12 +17,10 @@ parallelism in Go using generics
 
 ## Error handling
 
-This library relies on go-recovery to trap panics that occur in go routines.
-go-recovery by default will log panics but can be configured to send them to an error monitoring service.
+This library relies on go-recovery to trap panics that occur in user supplied work functions.
+This library does have unhandled panics, but only in places where panics should never occur.
+Errors and panics are written to an error channel for maximum flexibility.
+There are helpers for common patterns for dealing with errors:
 
-For maximum flexibility with error handling, many of the parallel functions return an error channel.
-Any errors that occur in work functions will be put into the error channel.
-There are helpers for common patterns for dealing with the errors:
-
-* CollectErrors
-* CancelAfterFirstError
+* CollectErrors (wait and convert to a slice)
+* CancelAfterFirstError (cancel and wait and convert to a slice)
